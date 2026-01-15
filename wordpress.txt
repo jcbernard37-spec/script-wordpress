@@ -1,0 +1,101 @@
+wordpress
+
+#!/bin/bash
+
+# =================================================================
+# SCRIPT FINAL - TOUT AUTOMATISÉ
+# DOMAINE : wordpress.tech.lan | IP : 192.168.20.135
+# =================================================================
+
+# 0. Vérification des droits root
+if [ "$EUID" -ne 0 ]; then 
+  echo "❌ Merci de lancer ce script avec sudo."
+  exit
+fi
+
+DOMAIN="wordpress.tech.lan"
+SITE_DIR="/var/www/wordpress_tech"
+IP_ADDR="192.168.20.135"
+
+clear
+echo "🚀 Installation totale en cours pour $DOMAIN..."
+sleep 2
+
+# 1. Pré-configuration phpMyAdmin (Silencieux)
+echo "phpmyadmin phpmyadmin/dbconfig-install boolean true" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/app-password-confirm password tech$" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/mysql/admin-pass password tech$" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/mysql/app-pass password tech$" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2" | debconf-set-selections
+
+# 2. Installation des paquets
+export DEBIAN_FRONTEND=noninteractive
+apt update -y && apt upgrade -y
+apt install -y apache2 mariadb-server php libapache2-mod-php php-mysql php-curl php-gd php-mbstring php-xml php-zip curl ufw bind9 vim phpmyadmin
+
+# 3. Configuration MySQL
+mysql -e "CREATE DATABASE IF NOT EXISTS tech_db;"
+mysql -e "CREATE USER IF NOT EXISTS 'tech'@'localhost' IDENTIFIED BY 'tech$';"
+mysql -e "GRANT ALL PRIVILEGES ON tech_db.* TO 'tech'@'localhost';"
+mysql -e "ALTER USER 'tech'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('tech$');"
+mysql -e "FLUSH PRIVILEGES;"
+
+# 4. Création automatique du Virtual Host
+echo "🌐 Création du Virtual Host Apache..."
+cat <<EOF > /etc/apache2/sites-available/wordpress_tech.conf
+<VirtualHost *:80>
+    ServerAdmin tech@tech.lan
+    ServerName $DOMAIN
+    DocumentRoot $SITE_DIR
+    <Directory $SITE_DIR>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+    ErrorLog \${APACHE_LOG_DIR}/wordpress_tech_error.log
+    CustomLog \${APACHE_LOG_DIR}/wordpress_tech_access.log combined
+</VirtualHost>
+EOF
+
+# Activation de la config et des modules
+a2ensite wordpress_tech.conf
+a2dissite 000-default.conf
+a2enmod rewrite
+
+# 5. Préparation dossier et Installation WordPress via WP-CLI
+mkdir -p $SITE_DIR
+curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+chmod +x wp-cli.phar
+mv wp-cli.phar /usr/local/bin/wp
+
+cd $SITE_DIR
+wp core download --locale=fr_FR --allow-root
+wp config create --dbname=tech_db --dbuser=tech --dbpass='tech$' --dbhost='localhost' --allow-root
+wp core install --url="http://$DOMAIN" --title="Site de Tech" --admin_user=tech --admin_password='tech$' --admin_email="tech@exemple.com" --allow-root
+
+# 6. Liaison phpMyAdmin
+ln -s /etc/phpmyadmin/apache.conf /etc/apache2/conf-available/phpmyadmin.conf
+a2enconf phpmyadmin.conf
+systemctl restart apache2
+
+# 7. Firewall & Permissions
+ufw allow 'Apache Full'
+ufw allow Bind9
+chown -R tech:www-data $SITE_DIR
+find $SITE_DIR -type d -exec chmod 755 {} \;
+find $SITE_DIR -type f -exec chmod 644 {} \;
+
+# --- RÉCAPITULATIF FINAL ---
+clear
+echo "-------------------------------------------------------"
+echo "✅ TOUT EST PRÊT ! TU N'AS RIEN EU À FAIRE."
+echo "-------------------------------------------------------"
+echo "🏠 SITE WEB     : http://$DOMAIN"
+echo "🔑 ADMIN WP     : http://$DOMAIN/wp-admin"
+echo "🗄️ PHPMYADMIN   : http://$IP_ADDR/phpmyadmin"
+echo "-------------------------------------------------------"
+echo "👤 UTILISATEUR  : tech"
+echo "🔑 MOT DE PASSE : tech$"
+echo "-------------------------------------------------------"
+
+rm -- "$0"
